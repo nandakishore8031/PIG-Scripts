@@ -1,1 +1,210 @@
+Pig script 1
+Value of pig script: 
+This report helps the career services consultant see the number of job postings by area code in the US. This 
+report would allow valuable information comparing which specific areas (by area code) in the same city or state, have 
+the most jobs. Good visualizations could be built on this data, by overlaying the area code job counts on a map. The 
+null values were filtered to eliminate bad values.
 
+--pig -useHCatalog -x local -f area_code_counts.pig
+
+dice = LOAD 'default.orc_dice' USING org.apache.hcatalog.pig.HCatLoader();
+dice_filtered = FILTER dice BY ((posted IS NOT NULL) AND (posted != ''));
+
+--Just the area code column
+area_codes_only = FOREACH dice_filtered GENERATE REGEX_EXTRACT(areacode, '(^[0-9]{3})', 1) AS areacode;
+
+--Group by the area code 
+area_code_grouped = GROUP area_codes_only BY areacode;
+
+--Take each area code and count the number of postings with that area code
+area_code_counted = FOREACH area_code_grouped GENERATE group AS area_code, COUNT(area_codes_only.areacode) AS area_code_count;
+
+--Order the results by the area code
+area_code_ordered = ORDER area_code_counted BY area_code DESC;
+
+--Store the results in "area_code_counts_output" directory
+STORE area_code_ordered INTO 'area_code_counts_OUTPUT' USING PigStorage();
+
+Pig script 2
+Value of pig script: 
+This report shows job positions and locations by area code. The job seeker could search by area code and find
+position titles he is looking in a particular city/location. It shows the area code and all the jobs for that area
+code and their specific location. REGEX_EXTRACT is used to extract the three digits of the area code so accurate 
+data is returned.
+
+-- pig -useHCatalog -f jobs_by_city.pig
+
+-- Load the dice data in dice_data
+dice_data = LOAD 'default.orc_dice' USING org.apache.hcatalog.pig.HCatLoader();
+
+-- taking only valid area code and extracting only exact TITLE from the title column.
+-- Another option to get the exact job title from TITLE by using substring function ex: SUBSTRING(title,1,INDEX(title,'-',1)-1)
+-- but would like to solve this using regular expressions
+fareacode = FOREACH dice_data GENERATE REGEX_EXTRACT(areacode, '(^[0-9]{3}$)',1)  AS gareacode,RTRIM(REGEX_EXTRACT(title,'(^[a-zA-Z .\\/]*[a-zA-Z0-9 \\(\\.)]*)',1)) AS ntitle, location ;
+
+-- Gathering the information of title and location for an area code
+byareacode = GROUP fareacode BY gareacode;
+
+-- Generating the areacode, job positions in that particular area and displaying the corrosponding location
+listjobs = FOREACH byareacode GENERATE group, fareacode.ntitle, fareacode.location ;
+
+--Store the results in 'jobs_by_city' directory
+STORE listjobs INTO 'jobs_by_city_OUTPUT' USING PigStorage();
+
+
+Pig script 3
+Value of pig script: 
+This report shows the percentage of jobs in a particular state compared to the all the jobs available. 
+Ex: UT .03, CA .18 It is used by the career services consultant to find which states have more jobs than others so 
+job seekers can see where the most jobs are available. The career services consultant could publish a visualization 
+on the Dice website showing states that have the most jobs (a heat map). This script only shows the top 10 states and
+their job percentage. The script could be adjusted for all states.
+
+
+--- pig -useHCatalog -f percentage_jobs_by_state.pig
+
+-- Registering the python code to use its functions and features
+REGISTER 'loclength.py' USING org.apache.pig.scripting.jython.JythonScriptEngine AS myudfs;
+
+-- load the data
+data2 = LOAD 'default.orc_dice' USING org.apache.hcatalog.pig.HCatLoader();
+
+-- remove dirty data in location
+ gloc = FILTER data2 BY ((location IS NOT NULL) AND (location != '' ));
+
+-- Group all dice data
+ grpdata = GROUP gloc ALL;
+
+-- Find the total number of jobs available
+ jobcount = FOREACH grpdata GENERATE group , (FLOAT)(COUNT(gloc.diceid)) as wholejobcount;
+
+-- Taking out the states from location field
+st_posted = FOREACH gloc GENERATE SUBSTRING(location,INDEXOF(location,',',1)+2,myudfs.loclength(location)) AS states,posted;
+
+-- Filtering out the bad state values
+newlist = FILTER st_posted BY (SIZE(states) == 2);
+
+-- Grouping all states by state value
+grploc = GROUP newlist BY states;
+
+-- Counting the number of jobs in each state
+state_jobcount = FOREACH grploc GENERATE group ,(FLOAT)(COUNT(newlist.posted)) as statejobcount;
+
+-- Finding the ratio of jobs available in each state to the total # of jobs
+ratio =  FOREACH state_jobcount GENERATE group , ((statejobcount/jobcount.wholejobcount)*100) AS JobRatio;
+
+-- Order by highest ratio percentage
+orderratio = ORDER ratio BY JobRatio DESC;
+
+-- Top 10 state ratios
+limit10 = LIMIT orderratio 10 ;
+
+-- Store data into a directory
+STORE limit10 INTO 'percentage_jobs_by_state_OUTPUT' ;
+
+
+Pig script 4
+Value of pig script: 
+This report shows the number of new postings in any given day in the dataset. This is valuable because it shows 
+which days are most busy for new postings, and indicates job demand based on the days in a month. The report is ordered by
+the greatest number of new postings in a particular day. The career services consultant can see the statistics over time
+of which days in a month, over a number of years, have particular jobs and track jobs through the recent recession to see
+when demand for filled positions decreased and how long it took for the market to gain strength again.
+
+--Run the below command to get the PIG Report
+--pig -useHCatalog -x local -f postings_per_day.pig
+
+--Loading ORC file which has dice data
+dice_data = LOAD 'default.orc_dice' USING org.apache.hcatalog.pig.HCatLoader();
+
+--Filtering out the Nulls
+dice_filtered = FILTER dice_data BY ((posted IS NOT NULL) AND (posted != ''));
+groupbydate = GROUP dice_filtered BY posted;
+
+--Count the number of jobs per day the dice.com is posting
+jobsperday = FOREACH groupbydate GENERATE group,COUNT(dice_filtered.posted) AS num_postings;
+
+--Orders the results by date
+orderedjobsperday = ORDER jobsperday BY num_postings DESC;
+
+--Limit number of records to 100
+limit_100_days = LIMIT orderedjobsperday 100;
+
+--Store the results in 'postings_per_day_output' directory
+STORE limit_100_days INTO 'postings_per_day_OUTPUT' USING PigStorage();
+
+
+
+Pig script 5
+Value of pig script: 
+This report shows which skill is in greatest demand in each state. Job seekers would see which state is in most demand 
+of their skillset. For example, if a job seeker has good experience in Javascript, California is the place that demands 
+Javascript most. The current report uses only 200 rows of data from the full dataset because the full dataset has a python 
+escape character that causes errors with the python UDF. Once the full dataset is cleaned of the escape character, the report
+ could be run on all the data, making for more accurate results. Dice.com could know which companies to encourage to post their 
+ jobs with them because they now know what skills are most in demand in any given state.
+ 
+ 
+ -- pig -useHCatalog -f top_skill_in_states.pig
+
+-- registering the python file to include functions defined in python file
+REGISTER 'loclenpy.py' USING org.apache.pig.scripting.jython.JythonScriptEngine AS myudfs;
+
+-- Loading the dice data into data2
+data2 = LOAD 'default.orc_dice1' USING org.apache.hcatalog.pig.HCatLoader();
+
+-- Removing the dirty data from location and skills fields only because this report needs only these 2 columns
+gloc = FILTER data2 BY ((location IS NOT NULL) AND (location != '' ) AND (skills IS NOT NULL) AND (skills != '' ));
+
+-- Taking out the states from location field
+state_skill = FOREACH gloc GENERATE SUBSTRING(location,INDEXOF(location,',',1)+2,myudfs.loclength(location)) AS states,skills;
+
+-- Gathering the skills of each state using GROUP BY clause
+groupbyst = GROUP state_skill BY states;
+
+-- Find out the skill which has greatest demand in a city
+topskill_states = FOREACH groupbyst GENERATE group, myudfs.topskill(state_skill.skills) AS topskill;
+
+-- Storing the results in top_skill_in_states_OUTPUT
+STORE topskill_states INTO 'top_skill_in_states_OUTPUT';
+
+loclenpy.py code:
+
+from org.apache.pig.scripting import *
+import operator
+import re
+
+@outputSchema('loclength:int')
+def loclength(location):
+        return len(location)
+
+
+@outputSchema('topskillmarket:chararray')
+def topskill(skills):
+
+    tskill = ''
+    strip_skill = ''
+    lower_skill = ''
+    skillarray={}
+    n = "_".join([str(i[0]) for i in skills])
+    newtext = re.sub("[_]+","" , n)
+    newtext1 = re.sub("[{}()/]+","" , newtext)
+
+    pskill = newtext1.split(',')
+    for eskill in pskill:
+        strip_skill = eskill.strip()
+        lower_skill = strip_skill.lower()
+        if lower_skill not in skillarray:
+            skillarray[lower_skill] = 1
+        else:
+            skillarray[lower_skill] += 1
+
+    tempdic =skillarray.copy()
+
+    for k in skillarray.keys():
+        if k == '':
+            del tempdic[k]
+
+    tskill = max(tempdic.items(), key=operator.itemgetter(1))[0]
+
+    return (tskill)
